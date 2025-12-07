@@ -1,0 +1,2 @@
+funcion()
+    retrn (NULL)
