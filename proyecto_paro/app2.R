@@ -8,6 +8,7 @@ library(scales)
 library(shinyjs)
 library(DT)
 
+
 # Definir la lista de años al inicio
 anios <- 2010:2024
 anios_titulos <- paste(min(anios), max(anios), sep = "–")
@@ -161,6 +162,9 @@ for (ano in anios) {
   }
 }
 
+
+
+
 # --------------------------------------------------------------------------------------
 # ---------- AÑADIDO: DESCARGA Y LECTURA DE POBLACIÓN (INE 2855..2907) ----------
 # --------------------------------------------------------------------------------------
@@ -219,11 +223,6 @@ leer_ine_csv_poblacion <- function(ruta) {
 
   col_mun <- col_mun[1]; col_sex <- col_sex[1]; col_per <- col_per[1]; col_tot <- col_tot[1]
 
-  # Filtrar sólo Sexo == "Total"
-  filas_total <- tolower(trimws(as.character(df[[col_sex]]))) == "total"
-  df <- df[filas_total, , drop = FALSE]
-  if (nrow(df) == 0) return(NULL)
-
   # Extraer código municipal (primeros 5 dígitos)
   municipios_raw <- as.character(df[[col_mun]])
   cod_mun <- sub("^\\s*([0-9]{5}).*$", "\\1", municipios_raw)
@@ -238,20 +237,32 @@ leer_ine_csv_poblacion <- function(ruta) {
   tot_clean <- gsub(",", ".", tot_clean, fixed = TRUE)
   poblacion_num <- suppressWarnings(as.numeric(tot_clean))
 
+# Convertir columna sexo en 3 columnas
+  sexo <- tolower(trimws(as.character(df[[col_sex]])))
+  sexo <- dplyr::recode(sexo,
+                        "hombres" = "hombres",
+                        "mujeres" = "mujeres",
+                        "total"   = "total",
+                        .default = NA_character_)
+
+
   out <- data.frame(
-    cod_mun = cod_mun,
-    anio = anio,
-    poblacion = poblacion_num,
-    fuente_file = basename(ruta),
-    stringsAsFactors = FALSE
+      cod_mun = cod_mun,
+      anio = anio,
+      sexo = sexo,
+      poblacion = poblacion_num,
+      fuente_file = basename(ruta),
+      stringsAsFactors = FALSE
   )
+
 
   out <- out[!is.na(out$cod_mun) & !is.na(out$anio) & !is.na(out$poblacion), , drop = FALSE]
   if (nrow(out) == 0) return(NULL)
+  out <- out %>% select(cod_mun, anio, sexo, poblacion)
 
-  out <- out %>% select(cod_mun, anio, poblacion)
   out
 }
+
 
 # Leer y concatenar todos los ficheros descargados
 poblacion_list <- lapply(poblacion_files, leer_ine_csv_poblacion)
@@ -259,23 +270,49 @@ poblacion_list <- Filter(Negate(is.null), poblacion_list)
 
 if (length(poblacion_list) > 0) {
   poblacion_municipio_df <- bind_rows(poblacion_list) %>%
-    mutate(cod_mun = as.character(cod_mun),
-           anio = as.integer(anio),
-           poblacion = as.numeric(poblacion)) %>%
+    mutate(
+      cod_mun = as.character(cod_mun),
+      anio = as.integer(anio),
+      poblacion = as.numeric(poblacion)
+    ) %>%
+    pivot_wider(
+      names_from = sexo,
+      values_from = poblacion,
+      names_prefix = "poblacion_"
+    ) %>%
+    filter(anio >= 2010, anio <= 2025) %>%  
     arrange(cod_mun, desc(anio))
+
 } else {
-  poblacion_municipio_df <- tibble::tibble(cod_mun = character(), anio = integer(), poblacion = numeric())
+  poblacion_municipio_df <- tibble::tibble(
+    cod_mun = character(),
+    anio = integer(),
+    poblacion_hombres = numeric(),
+    poblacion_mujeres = numeric(),
+    poblacion_total = numeric()
+  )
 }
+
+poblacion_municipio_df <- poblacion_municipio_df %>%
+  rename(`cod municipio` = cod_mun)
+
+
 
 get_poblacion_municipio <- function() {
   poblacion_municipio_df
 }
+
+#View(poblacion_municipio_df)
 
 message(sprintf("Población: ficheros procesados: %d; registros municipales: %d",
                 length(poblacion_files), nrow(poblacion_municipio_df)))
 # --------------------------------------------------------------------------------------
 # ---------- FIN BLOQUE POBLACIÓN ----------
 # --------------------------------------------------------------------------------------
+
+
+
+
 
 # --------------------------------------------------------------------------------------
 # ---------- 3. UI (NAVBAR con páginas por gráfico) ----------
