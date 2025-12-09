@@ -1,2 +1,0 @@
-funcion()
-    retrn (NULL)

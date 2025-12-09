@@ -13,309 +13,13 @@ library(DT)
 anios <- 2010:2024
 anios_titulos <- paste(min(anios), max(anios), sep = "–")
 
-# --------------------------------------------------------------------------------------
-# ---------- 1. FUNCIÓN PARA LEER UN FICHERO DEL SEPE ----------
-# --------------------------------------------------------------------------------------
-leer_sepe_csv <- function(ruta) {
-  if (!file.exists(ruta)) {
-    warning(sprintf("Archivo no encontrado: %s", ruta))
-    return(NULL)
-  }
-
-  df <- tryCatch(
-    read.csv(
-      ruta,
-      sep = ";",
-      fileEncoding = "latin1",
-      header = TRUE,
-      skip = 1,
-      check.names = FALSE,
-      stringsAsFactors = FALSE
-    ),
-    error = function(e) {
-      message(sprintf("Error leyendo %s : %s", basename(ruta), e$message))
-      return(NULL)
-    }
-  )
-
-  if (is.null(df)) return(NULL)
-
-  es_col_numerica <- sapply(df, function(x) {
-    any(grepl("[0-9]", x, perl = TRUE), na.rm = TRUE)
-  })
-
-  cols_num <- names(df)[es_col_numerica]
-
-  df[cols_num] <- lapply(df[cols_num], function(col) {
-    col_chr <- as.character(col)
-    col_chr[col_chr == "<5"] <- "0"
-    col_chr
-  })
-
-  df[cols_num] <- lapply(df[cols_num], function(col) {
-    col_corrected <- gsub(",", ".", as.character(col), fixed = TRUE)
-    suppressWarnings(as.numeric(col_corrected))
-  })
-
-  df
-}
-
-# --------------------------------------------------------------------------------------
-# ---------- 1b. CORREGIR LOS NOMBRES DE LAS CCAA ----------
-# --------------------------------------------------------------------------------------
-normalizar_ccaa <- function(x) {
-  x <- trimws(x)
-  x <- gsub("–", "-", x)
-  x <- gsub("—", "-", x)
-  x <- gsub("−", "-", x)
-  x <- gsub("  +", " ", x)
-  x <- gsub("Castilla *- *La Mancha", "Castilla-La Mancha", x)
-  x <- gsub("Castilla *La Mancha", "Castilla-La Mancha", x)
-  x
-}
-
-# --------------------------------------------------------------------------------------
-# ---------- PRE 2. DESCARGA DEL DATASET (Se ejecuta al cargar el script) ----------
-# --------------------------------------------------------------------------------------
-dir_data <- file.path("data")
-dir_contratos <- file.path(dir_data, "contratos")
-dir_paro      <- file.path(dir_data, "paro")
-dir_dtes_empleo <- file.path(dir_data, "dtes_empleo")
-
-dir.create(dir_contratos, recursive = TRUE, showWarnings = FALSE)
-dir.create(dir_paro, recursive = TRUE, showWarnings = FALSE)
-dir.create(dir_dtes_empleo, recursive = TRUE, showWarnings = FALSE)
-
-descargar_si_existe <- function(url, destfile) {
-  res_head <- tryCatch(httr::HEAD(url, timeout(10)), error = function(e) NULL)
-  status <- NULL
-  if (!is.null(res_head)) status <- httr::status_code(res_head)
-
-  if (is.null(status) || status >= 400) {
-    res_get <- tryCatch(httr::GET(url, httr::progress(), httr::write_disk(destfile, overwrite = TRUE), timeout(60)),
-                        error = function(e) e)
-    if (inherits(res_get, "error")) {
-      message(sprintf("No se pudo descargar %s : %s", basename(destfile), res_get$message))
-      if (file.exists(destfile)) file.remove(destfile)
-      return(FALSE)
-    } else {
-      status_get <- httr::status_code(res_get)
-      if (status_get >= 400) {
-        message(sprintf("No disponible (HTTP %s): %s", status_get, basename(destfile)))
-        if (file.exists(destfile)) file.remove(destfile)
-        return(FALSE)
-      } else {
-        message(sprintf("Descargado: %s", basename(destfile)))
-        return(TRUE)
-      }
-    }
-  } else {
-    res <- tryCatch(httr::GET(url, httr::progress(), httr::write_disk(destfile, overwrite = TRUE), timeout(60)),
-                    error = function(e) e)
-    if (inherits(res, "error")) {
-      message(sprintf("Error descargando %s : %s", basename(destfile), res$message))
-      if (file.exists(destfile)) file.remove(destfile)
-      return(FALSE)
-    } else {
-      st <- httr::status_code(res)
-      if (st >= 400) {
-        message(sprintf("No disponible (HTTP %s): %s", st, basename(destfile)))
-        if (file.exists(destfile)) file.remove(destfile)
-        return(FALSE)
-      } else {
-        message(sprintf("Descargado: %s", basename(destfile)))
-        return(TRUE)
-      }
-    }
-  }
-}
-base_contratos <- "https://sede.sepe.gob.es/es/portaltrabaja/resources/sede/datos_abiertos/datos/Contratos_por_municipios_%s_csv.csv"
-base_paro      <- "https://sede.sepe.gob.es/es/portaltrabaja/resources/sede/datos_abiertos/datos/Paro_por_municipios_%s_csv.csv"
-base_dtes_empleo <- "https://sede.sepe.gob.es/es/portaltrabaja/resources/sede/datos_abiertos/datos/Dtes_empleo_por_municipios_%s_csv.csv"
-
-for (ano in anios) {
-  url_c <- sprintf(base_contratos, ano)
-  dest_c <- file.path(dir_contratos, sprintf("Contratos_por_municipios_%s_csv.csv", ano))
-  if (!file.exists(dest_c)) {
-    message(sprintf("Comprobando contratos %s ...", ano))
-    descargar_si_existe(url_c, dest_c)
-  } else {
-    message(sprintf("Ya existe: %s", dest_c))
-  }
-
-  url_p <- sprintf(base_paro, ano)
-  dest_p <- file.path(dir_paro, sprintf("Paro_por_municipios_%s_csv.csv", ano))
-  if (!file.exists(dest_p)) {
-    message(sprintf("Comprobando paro %s ...", ano))
-    descargar_si_existe(url_p, dest_p)
-  } else {
-    message(sprintf("Ya existe: %s", dest_p))
-  }
-
-  url_d <- sprintf(base_dtes_empleo, ano)
-  dest_d <- file.path(dir_dtes_empleo, sprintf("Dtes_empleo_por_municipios_%s_csv.csv", ano))
-  if (!file.exists(dest_d)) {
-    message(sprintf("Comprobando demandantes de empleo %s ...", ano))
-    descargar_si_existe(url_d, dest_d)
-  } else {
-    message(sprintf("Ya existe: %s", dest_d))
-  }
-}
-
-
+source("preprocessing.R")
+res <- descargar_datasets_sepe(anios = anios, dir_data = "data")
+res <- descargar_y_procesar_poblacion(codigos_ine = 2855:2907, dir_data = "data", anio_min = 2010, anio_max = 2025)
 
 
 # --------------------------------------------------------------------------------------
-# ---------- AÑADIDO: DESCARGA Y LECTURA DE POBLACIÓN (INE 2855..2907) ----------
-# --------------------------------------------------------------------------------------
-# Este bloque utiliza la función descargar_si_existe() ya definida más arriba.
-dir_poblacion <- file.path(dir_data, "poblacion")
-dir.create(dir_poblacion, recursive = TRUE, showWarnings = FALSE)
-
-base_ine_pob <- "https://www.ine.es/jaxiT3/files/t/csv_bdsc/%s.csv"
-codigos_ine <- 2855:2907
-
-# Descarga de cada CSV si no existe
-poblacion_files <- character(0)
-for (cod in codigos_ine) {
-  url <- sprintf(base_ine_pob, cod)
-  destfile <- file.path(dir_poblacion, sprintf("ine_poblacion_%s.csv", cod))
-  if (!file.exists(destfile)) {
-    message(sprintf("Comprobando/descargando INE %s ...", cod))
-    ok <- descargar_si_existe(url, destfile)   # <-- usa la función existente
-    if (isTRUE(ok) && file.exists(destfile)) {
-      poblacion_files <- c(poblacion_files, destfile)
-    } else {
-      message(sprintf("No se descargó %s (omitido).", cod))
-    }
-  } else {
-    message(sprintf("Ya existe: %s", basename(destfile)))
-    poblacion_files <- c(poblacion_files, destfile)
-  }
-}
-
-# Lector específico para el formato:
-# "Municipios;Sexo;Periodo;Total" (ej. "02001 Abengibre;Total;2024;759")
-leer_ine_csv_poblacion <- function(ruta) {
-  if (!file.exists(ruta)) return(NULL)
-
-  df <- tryCatch(
-    read.csv(ruta, sep = ";", fileEncoding = "latin1", header = TRUE, stringsAsFactors = FALSE, check.names = FALSE),
-    error = function(e) {
-      message(sprintf("Error leyendo INE %s : %s", basename(ruta), e$message))
-      return(NULL)
-    }
-  )
-
-  if (is.null(df) || ncol(df) == 0) return(NULL)
-  names(df) <- trimws(names(df))
-
-  # localizar columnas relevantes
-  col_mun <- names(df)[grepl("^Municipios$|^Municipio$|municipios|municipio", names(df), ignore.case = TRUE)]
-  col_sex <- names(df)[grepl("^Sexo$|sexo", names(df), ignore.case = TRUE)]
-  col_per <- names(df)[grepl("^Periodo$|Periodo|periodo|Año|Anio|anio", names(df), ignore.case = TRUE)]
-  col_tot <- names(df)[grepl("^Total$|total|TOTAL|Poblaci|habitantes", names(df), ignore.case = TRUE)]
-
-  if (length(col_mun) == 0 || length(col_sex) == 0 || length(col_per) == 0 || length(col_tot) == 0) {
-    message(sprintf("Estructura inesperada en %s. No contiene columnas mínimas.", basename(ruta)))
-    return(NULL)
-  }
-
-  col_mun <- col_mun[1]; col_sex <- col_sex[1]; col_per <- col_per[1]; col_tot <- col_tot[1]
-
-  # Extraer código municipal (primeros 5 dígitos)
-  municipios_raw <- as.character(df[[col_mun]])
-  cod_mun <- sub("^\\s*([0-9]{5}).*$", "\\1", municipios_raw)
-  cod_mun[!grepl("^[0-9]{5}$", cod_mun)] <- NA_character_
-
-  # Periodo → año
-  anio <- suppressWarnings(as.integer(as.character(df[[col_per]])))
-
-  # Limpiar Total → numérico
-  tot_raw <- as.character(df[[col_tot]])
-  tot_clean <- gsub("\\.", "", tot_raw)
-  tot_clean <- gsub(",", ".", tot_clean, fixed = TRUE)
-  poblacion_num <- suppressWarnings(as.numeric(tot_clean))
-
-# Convertir columna sexo en 3 columnas
-  sexo <- tolower(trimws(as.character(df[[col_sex]])))
-  sexo <- dplyr::recode(sexo,
-                        "hombres" = "hombres",
-                        "mujeres" = "mujeres",
-                        "total"   = "total",
-                        .default = NA_character_)
-
-
-  out <- data.frame(
-      cod_mun = cod_mun,
-      anio = anio,
-      sexo = sexo,
-      poblacion = poblacion_num,
-      fuente_file = basename(ruta),
-      stringsAsFactors = FALSE
-  )
-
-
-  out <- out[!is.na(out$cod_mun) & !is.na(out$anio) & !is.na(out$poblacion), , drop = FALSE]
-  if (nrow(out) == 0) return(NULL)
-  out <- out %>% select(cod_mun, anio, sexo, poblacion)
-
-  out
-}
-
-
-# Leer y concatenar todos los ficheros descargados
-poblacion_list <- lapply(poblacion_files, leer_ine_csv_poblacion)
-poblacion_list <- Filter(Negate(is.null), poblacion_list)
-
-if (length(poblacion_list) > 0) {
-  poblacion_municipio_df <- bind_rows(poblacion_list) %>%
-    mutate(
-      cod_mun = as.character(cod_mun),
-      anio = as.integer(anio),
-      poblacion = as.numeric(poblacion)
-    ) %>%
-    pivot_wider(
-      names_from = sexo,
-      values_from = poblacion,
-      names_prefix = "poblacion_"
-    ) %>%
-    filter(anio >= 2010, anio <= 2025) %>%  
-    arrange(cod_mun, desc(anio))
-
-} else {
-  poblacion_municipio_df <- tibble::tibble(
-    cod_mun = character(),
-    anio = integer(),
-    poblacion_hombres = numeric(),
-    poblacion_mujeres = numeric(),
-    poblacion_total = numeric()
-  )
-}
-
-poblacion_municipio_df <- poblacion_municipio_df %>%
-  rename(`cod municipio` = cod_mun)
-
-
-
-get_poblacion_municipio <- function() {
-  poblacion_municipio_df
-}
-
-#View(poblacion_municipio_df)
-
-message(sprintf("Población: ficheros procesados: %d; registros municipales: %d",
-                length(poblacion_files), nrow(poblacion_municipio_df)))
-# --------------------------------------------------------------------------------------
-# ---------- FIN BLOQUE POBLACIÓN ----------
-# --------------------------------------------------------------------------------------
-
-
-
-
-
-# --------------------------------------------------------------------------------------
-# ---------- 3. UI (NAVBAR con páginas por gráfico) ----------
+# ---------- 2. UI (NAVBAR con páginas por gráfico) ----------
 # --------------------------------------------------------------------------------------
 ui <- navbarPage(
   title = paste("SEPE — Datos por CCAA (", anios_titulos, ")"),
@@ -387,6 +91,7 @@ ui <- navbarPage(
 # ---------- 4. SERVER ----------
 # --------------------------------------------------------------------------------------
 server <- function(input, output, session) {
+  source("read_data.R")
 
   # Exponer la tabla de población como reactive dentro del server
   poblacion_df_server <- reactive({
@@ -396,8 +101,8 @@ server <- function(input, output, session) {
   agregador_ccaa <- function(df_raw, patrones_busqueda = c("paro", "contrat", "demand", "dtes", "total")) {
     if (is.null(df_raw) || !is.data.frame(df_raw) || nrow(df_raw) == 0) return(NULL)
 
-    if ("Comunidad Autónoma" %in% names(df_raw)) {
-      df_raw$`Comunidad Autónoma` <- normalizar_ccaa(df_raw$`Comunidad Autónoma`)
+    if ("Comunidad Aut" %in% names(df_raw)) {    
+      df_raw$`Comunidad Aut` <- normalizar_ccaa(df_raw$`Comunidad Aut`)
     } else {
       warning("No encontrada la columna 'Comunidad Autónoma' en un fichero.")
       return(NULL)
@@ -424,15 +129,15 @@ server <- function(input, output, session) {
        return(NULL)
     }
 
-    if (!("Código mes" %in% names(df_raw))) {
+    if (!("anio" %in% names(df_raw))) {
       warning("No hay columna 'Código mes' para extraer el año; se omite este fichero.")
       return(NULL)
     }
 
     df_raw %>%
-      mutate(anio = suppressWarnings(as.integer(substr(`Código mes`, 1, 4)))) %>%
+      mutate(anio = suppressWarnings(as.integer(substr(`anio`, 1, 4)))) %>%
       filter(!is.na(anio)) %>%
-      group_by(anio, comunidad = `Comunidad Autónoma`) %>%
+      group_by(anio, comunidad = `Comunidad Aut`) %>%
       summarise(valor = mean(.data[[chosen]], na.rm = TRUE), .groups = "drop")
   }
 
@@ -455,11 +160,12 @@ server <- function(input, output, session) {
         ano <- anios[i]
         setProgress(i/n_anios, detail = paste("Procesando año", ano))
 
-        ruta_contratos <- file.path("data", "contratos", sprintf("Contratos_por_municipios_%s_csv.csv", ano))
-        ruta_paro      <- file.path("data", "paro", sprintf("Paro_por_municipios_%s_csv.csv", ano))
-        ruta_dtes      <- file.path("data", "dtes_empleo", sprintf("Dtes_empleo_por_municipios_%s_csv.csv", ano))
+        ruta_contratos <- file.path("data", "contratos", sprintf("Contratos_por_municipios_%s_csv_processed.csv", ano))
+        ruta_paro      <- file.path("data", "paro", sprintf("Paro_por_municipios_%s_csv_processed.csv", ano))
+        ruta_dtes      <- file.path("data", "dtes_empleo", sprintf("Dtes_empleo_por_municipios_%s_csv_processed.csv", ano))
 
         df_c <- safe_read(ruta_contratos)
+        
         if (!is.null(df_c)) {
           agg_c <- agregador_ccaa(df_c, patrones_busqueda = c("contrat", "contrato", "total"))
           if (!is.null(agg_c)) contratos_list[[as.character(ano)]] <- agg_c %>% rename(contratos_total = valor)
@@ -592,7 +298,7 @@ server <- function(input, output, session) {
     ggplot(df_long, aes(x = comunidad_f, y = anio_f, fill = valor)) +
       geom_tile(color = "white") +
       scale_fill_gradient(low = low_col, high = high_col, name = paste(titulo_metrica(), "(media anual)")) +
-      labs(x = "Comunidad Autónoma", y = "Año", title = paste("Distribución de", titulo_metrica(), "por Comunidad Autónoma y año")) +
+      labs(x = "Comunidad Aut", y = "Año", title = paste("Distribución de", titulo_metrica(), "por Comunidad Autónoma y año")) +
       theme_minimal(base_size = 11) +
       theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.text.y = element_text(size = 9), plot.title = element_text(face = "bold"), panel.grid = element_blank())
   })
