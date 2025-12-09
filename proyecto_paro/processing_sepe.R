@@ -20,6 +20,25 @@ procesar_csv_sepe <- function(ruta_csv) {
   if (length(names(df)) >= 5) names(df)[5] <- "Cod provincia"
   
   primera_col_name <- names(df)[1]
+
+  # --- Sustituir "<5" por 0 en columnas numéricas (detectadas por contenido) ---
+  es_col_numerica <- sapply(df, function(x) {
+    any(grepl("[0-9]", x, perl = TRUE), na.rm = TRUE)
+  })
+
+  cols_num <- names(df)[es_col_numerica]
+
+  df[cols_num] <- lapply(df[cols_num], function(col) {
+    col_chr <- as.character(col)
+    col_chr[col_chr == "<5"] <- "0"
+    col_chr
+  })
+
+  df[cols_num] <- lapply(df[cols_num], function(col) {
+    col_corrected <- gsub(",", ".", as.character(col), fixed = TRUE)
+    suppressWarnings(as.numeric(col_corrected))
+  })
+  
   
   # --- 1. Crear anio ---------------------------------------------------
   if (!is.null(df[[1]])) {

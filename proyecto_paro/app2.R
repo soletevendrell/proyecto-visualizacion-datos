@@ -17,6 +17,7 @@ source("preprocessing.R")
 res <- descargar_datasets_sepe(anios = anios, dir_data = "data")
 res <- descargar_y_procesar_poblacion(codigos_ine = 2855:2907, dir_data = "data", anio_min = 2010, anio_max = 2025)
 
+
 # --------------------------------------------------------------------------------------
 # ---------- 2. UI (NAVBAR con páginas por gráfico) ----------
 # --------------------------------------------------------------------------------------
@@ -90,6 +91,7 @@ ui <- navbarPage(
 # ---------- 4. SERVER ----------
 # --------------------------------------------------------------------------------------
 server <- function(input, output, session) {
+  source("read_data.R")
 
   # Exponer la tabla de población como reactive dentro del server
   poblacion_df_server <- reactive({
@@ -99,8 +101,8 @@ server <- function(input, output, session) {
   agregador_ccaa <- function(df_raw, patrones_busqueda = c("paro", "contrat", "demand", "dtes", "total")) {
     if (is.null(df_raw) || !is.data.frame(df_raw) || nrow(df_raw) == 0) return(NULL)
 
-    if ("Comunidad Autónoma" %in% names(df_raw)) {
-      df_raw$`Comunidad Autónoma` <- normalizar_ccaa(df_raw$`Comunidad Autónoma`)
+    if ("Comunidad Aut" %in% names(df_raw)) {    
+      df_raw$`Comunidad Aut` <- normalizar_ccaa(df_raw$`Comunidad Aut`)
     } else {
       warning("No encontrada la columna 'Comunidad Autónoma' en un fichero.")
       return(NULL)
@@ -127,15 +129,15 @@ server <- function(input, output, session) {
        return(NULL)
     }
 
-    if (!("Código mes" %in% names(df_raw))) {
+    if (!("anio" %in% names(df_raw))) {
       warning("No hay columna 'Código mes' para extraer el año; se omite este fichero.")
       return(NULL)
     }
 
     df_raw %>%
-      mutate(anio = suppressWarnings(as.integer(substr(`Código mes`, 1, 4)))) %>%
+      mutate(anio = suppressWarnings(as.integer(substr(`anio`, 1, 4)))) %>%
       filter(!is.na(anio)) %>%
-      group_by(anio, comunidad = `Comunidad Autónoma`) %>%
+      group_by(anio, comunidad = `Comunidad Aut`) %>%
       summarise(valor = mean(.data[[chosen]], na.rm = TRUE), .groups = "drop")
   }
 
@@ -158,11 +160,12 @@ server <- function(input, output, session) {
         ano <- anios[i]
         setProgress(i/n_anios, detail = paste("Procesando año", ano))
 
-        ruta_contratos <- file.path("data", "contratos", sprintf("Contratos_por_municipios_%s_csv.csv", ano))
-        ruta_paro      <- file.path("data", "paro", sprintf("Paro_por_municipios_%s_csv.csv", ano))
-        ruta_dtes      <- file.path("data", "dtes_empleo", sprintf("Dtes_empleo_por_municipios_%s_csv.csv", ano))
+        ruta_contratos <- file.path("data", "contratos", sprintf("Contratos_por_municipios_%s_csv_processed.csv", ano))
+        ruta_paro      <- file.path("data", "paro", sprintf("Paro_por_municipios_%s_csv_processed.csv", ano))
+        ruta_dtes      <- file.path("data", "dtes_empleo", sprintf("Dtes_empleo_por_municipios_%s_csv_processed.csv", ano))
 
         df_c <- safe_read(ruta_contratos)
+        
         if (!is.null(df_c)) {
           agg_c <- agregador_ccaa(df_c, patrones_busqueda = c("contrat", "contrato", "total"))
           if (!is.null(agg_c)) contratos_list[[as.character(ano)]] <- agg_c %>% rename(contratos_total = valor)
@@ -295,7 +298,7 @@ server <- function(input, output, session) {
     ggplot(df_long, aes(x = comunidad_f, y = anio_f, fill = valor)) +
       geom_tile(color = "white") +
       scale_fill_gradient(low = low_col, high = high_col, name = paste(titulo_metrica(), "(media anual)")) +
-      labs(x = "Comunidad Autónoma", y = "Año", title = paste("Distribución de", titulo_metrica(), "por Comunidad Autónoma y año")) +
+      labs(x = "Comunidad Aut", y = "Año", title = paste("Distribución de", titulo_metrica(), "por Comunidad Autónoma y año")) +
       theme_minimal(base_size = 11) +
       theme(axis.text.x = element_text(angle = 45, hjust = 1), axis.text.y = element_text(size = 9), plot.title = element_text(face = "bold"), panel.grid = element_blank())
   })
