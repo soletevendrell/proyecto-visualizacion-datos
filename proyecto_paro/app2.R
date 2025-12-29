@@ -11,11 +11,12 @@ library(DT)
 
 # Definir la lista de años al inicio
 anios <- 2010:2024
+
 anios_titulos <- paste(min(anios), max(anios), sep = "–")
 
 source("preprocessing.R")
 res <- descargar_datasets_sepe(anios = anios, dir_data = "data")
-res <- descargar_y_procesar_poblacion(codigos_ine = 2855:2907, dir_data = "data", anio_min = 2010, anio_max = 2025)
+res <- descargar_y_procesar_poblacion(codigos_ine = 2854:2908, dir_data = "data", anio_min = 2010, anio_max = 2025)
 
 
 # --------------------------------------------------------------------------------------

@@ -184,8 +184,9 @@ descargar_datasets_sepe <- function(
 # -----------------------------
 # descargar_y_procesar_poblacion: usa la función superior descargar_si_existe
 # -----------------------------
+
 descargar_y_procesar_poblacion <- function(
-  codigos_ine = 2855:2907,
+  codigos_ine = 2854:2908, # AMPLIADO: 2854 es Álava (01) hasta 2908 (Melilla)
   dir_data = "data",
   dir_poblacion_sub = "poblacion",
   overwrite = FALSE,
@@ -200,23 +201,22 @@ descargar_y_procesar_poblacion <- function(
 
   # comprobar que descargar_si_existe está disponible
   if (!exists("descargar_si_existe", mode = "function")) {
-    stop("No se encontró la función 'descargar_si_existe' en el entorno. Defínela antes de llamar a esta función.")
+    stop("No se encontró la función 'descargar_si_existe' en el entorno.")
   }
 
   dir_poblacion <- file.path(dir_data, dir_poblacion_sub)
   dir.create(dir_poblacion, recursive = TRUE, showWarnings = FALSE)
-  ruta_poblacion_salida <- file.path(dir_poblacion, "poblacion_municipio_processed.csv")
+   
+  # Cambiamos el nombre del fichero de salida
+  ruta_poblacion_salida <- file.path(dir_poblacion, "poblacion_provincia_processed.csv")
 
-  # Si el fichero procesado ya existe y no estamos forzando overwrite -> salir sin hacer nada
+  # Si el fichero procesado ya existe y no overwrite -> salir
   if (file.exists(ruta_poblacion_salida) && !isTRUE(overwrite)) {
-    if (!quiet) message("El fichero procesado ya existe y overwrite = FALSE. No se hace nada: ", ruta_poblacion_salida)
-    # intentamos leer el fichero existente para devolver el data.frame (si es posible)
+    if (!quiet) message("El fichero procesado ya existe y overwrite = FALSE. Omitiendo: ", ruta_poblacion_salida)
     poblacion_existente <- tryCatch({
       read.csv(ruta_poblacion_salida, fileEncoding = "ISO-8859-1", stringsAsFactors = FALSE, check.names = FALSE)
-    }, error = function(e) {
-      if (!quiet) message("No se pudo leer el fichero procesado existente: ", e$message)
-      NULL
-    })
+    }, error = function(e) NULL)
+    
     return(invisible(list(files = list.files(dir_poblacion, pattern = "^ine_poblacion_.*\\.csv$", full.names = TRUE),
                           poblacion = poblacion_existente,
                           ruta_salida = ruta_poblacion_salida)))
@@ -225,6 +225,7 @@ descargar_y_procesar_poblacion <- function(
   base_ine_pob <- "https://www.ine.es/jaxiT3/files/t/csv_bdsc/%s.csv"
   poblacion_files <- character(0)
 
+  # Descarga
   for (cod in codigos_ine) {
     url <- sprintf(base_ine_pob, cod)
     destfile <- file.path(dir_poblacion, sprintf("ine_poblacion_%s.csv", cod))
@@ -235,80 +236,55 @@ descargar_y_procesar_poblacion <- function(
     )
     if (isTRUE(ok) && file.exists(destfile)) {
       poblacion_files <- c(poblacion_files, destfile)
-    } else {
-      if (!quiet) message(sprintf("No se descargó %s (omitido).", cod))
     }
   }
 
-  # lector específico (encapsulado)
+  # Función de lectura interna
   leer_ine_csv_poblacion <- function(ruta) {
     if (!file.exists(ruta)) return(NULL)
     df <- tryCatch(
       read.csv(ruta, sep = ";", fileEncoding = "latin1", header = TRUE, stringsAsFactors = FALSE, check.names = FALSE),
-      error = function(e) {
-        if (!quiet) message(sprintf("Error leyendo INE %s : %s", basename(ruta), e$message))
-        return(NULL)
-      }
+      error = function(e) { return(NULL) }
     )
     if (is.null(df) || ncol(df) == 0) return(NULL)
     names(df) <- trimws(names(df))
 
-    # localizar columnas relevantes (flexible)
-    col_mun <- names(df)[grepl("^Municipios$|^Municipio$|municipios|municipio", names(df), ignore.case = TRUE)]
-    col_sex <- names(df)[grepl("^Sexo$|sexo", names(df), ignore.case = TRUE)]
-    col_per <- names(df)[grepl("^Periodo$|Periodo|periodo|Año|Anio|anio|Year", names(df), ignore.case = TRUE)]
-    col_tot <- names(df)[grepl("^Total$|total|TOTAL|Poblaci|habitantes|Population", names(df), ignore.case = TRUE)]
+    col_mun <- names(df)[grepl("^Municipios$|^Municipio$|municipios|municipio", names(df), ignore.case = TRUE)][1]
+    col_sex <- names(df)[grepl("^Sexo$|sexo", names(df), ignore.case = TRUE)][1]
+    col_per <- names(df)[grepl("^Periodo$|Periodo|periodo|Año|Anio|anio|Year", names(df), ignore.case = TRUE)][1]
+    col_tot <- names(df)[grepl("^Total$|total|TOTAL|Poblaci|habitantes|Population", names(df), ignore.case = TRUE)][1]
 
-    if (length(col_mun) == 0 || length(col_sex) == 0 || length(col_per) == 0 || length(col_tot) == 0) {
-      if (!quiet) message(sprintf("Estructura inesperada en %s. No contiene columnas mínimas.", basename(ruta)))
-      return(NULL)
-    }
-
-    col_mun <- col_mun[1]; col_sex <- col_sex[1]; col_per <- col_per[1]; col_tot <- col_tot[1]
+    if (is.na(col_mun) || is.na(col_sex) || is.na(col_per) || is.na(col_tot)) return(NULL)
 
     municipios_raw <- as.character(df[[col_mun]])
+    # Extraer CP (5 dígitos)
     cod_mun <- sub("^\\s*([0-9]{5}).*$", "\\1", municipios_raw)
     cod_mun[!grepl("^[0-9]{5}$", cod_mun)] <- NA_character_
 
     anio <- suppressWarnings(as.integer(as.character(df[[col_per]])))
-
-    tot_raw <- as.character(df[[col_tot]])
-    tot_clean <- gsub("\\.", "", tot_raw)
+    
+    tot_clean <- gsub("\\.", "", as.character(df[[col_tot]]))
     tot_clean <- gsub(",", ".", tot_clean, fixed = TRUE)
     poblacion_num <- suppressWarnings(as.numeric(tot_clean))
 
     sexo_raw <- tolower(trimws(as.character(df[[col_sex]])))
     sexo <- dplyr::recode(sexo_raw,
-                          "hombres" = "hombres",
-                          "hombre" = "hombres",
-                          "mujeres" = "mujeres",
-                          "mujer" = "mujeres",
-                          "total"   = "total",
-                          "ambos"   = "total",
+                          "hombres" = "hombres", "hombre" = "hombres",
+                          "mujeres" = "mujeres", "mujer" = "mujeres",
+                          "total" = "total", "ambos" = "total",
                           .default = NA_character_)
 
-    out <- data.frame(
-      cod_mun = cod_mun,
-      anio = anio,
-      sexo = sexo,
-      poblacion = poblacion_num,
-      fuente_file = basename(ruta),
-      stringsAsFactors = FALSE
-    )
-
-    out <- out[!is.na(out$cod_mun) & !is.na(out$anio) & !is.na(out$poblacion), , drop = FALSE]
-    if (nrow(out) == 0) return(NULL)
-    # devolver columnas básicas
-    out <- out[, c("cod_mun", "anio", "sexo", "poblacion"), drop = FALSE]
-    out
+    out <- data.frame(cod_mun = cod_mun, anio = anio, sexo = sexo, poblacion = poblacion_num, stringsAsFactors = FALSE)
+    out[!is.na(out$cod_mun) & !is.na(out$anio) & !is.na(out$poblacion), , drop = FALSE]
   }
 
-  # Leer y concatenar
+  # Procesamiento y Agregación
   poblacion_list <- lapply(poblacion_files, leer_ine_csv_poblacion)
   poblacion_list <- Filter(Negate(is.null), poblacion_list)
 
   if (length(poblacion_list) > 0) {
-    poblacion_municipio_df <- dplyr::bind_rows(poblacion_list) %>%
+    # 1. Unir y Pivotar
+    df_raw <- dplyr::bind_rows(poblacion_list) %>%
       dplyr::mutate(
         cod_mun = as.character(cod_mun),
         anio = as.integer(anio),
@@ -319,45 +295,120 @@ descargar_y_procesar_poblacion <- function(
         values_from = poblacion,
         names_prefix = "poblacion_"
       ) %>%
-      dplyr::filter(anio >= anio_min, anio <= anio_max) %>%
-      dplyr::arrange(cod_mun, dplyr::desc(anio))
+      dplyr::filter(anio >= anio_min, anio <= anio_max)
+
+    # 2. DEFINIR MAPEO PROVINCIA -> CA
+    # Creamos un tibble auxiliar para cruzar los datos
+    mapa_ca_prov <- tibble::tibble(
+      cod_provincia = c(
+        # Andalucía (01)
+        "04","11","14","18","21","23","29","41",
+        # Aragón (02)
+        "22","44","50",
+        # Asturias (03)
+        "33",
+        # Baleares (04)
+        "07",
+        # Canarias (05)
+        "35","38",
+        # Cantabria (06)
+        "39",
+        # Castilla y León (07)
+        "05","09","24","34","37","40","42","47","49",
+        # Castilla-La Mancha (08)
+        "02","13","16","19","45",
+        # Cataluña (09)
+        "08","17","25","43",
+        # C. Valenciana (10)
+        "03","12","46",
+        # Extremadura (11)
+        "06","10",
+        # Galicia (12)
+        "15","27","32","36",
+        # Madrid (13)
+        "28",
+        # Murcia (14)
+        "30",
+        # Navarra (15)
+        "31",
+        # País Vasco (16)
+        "01","20","48",
+        # La Rioja (17)
+        "26",
+        # Ceuta (18)
+        "51",
+        # Melilla (19)
+        "52"
+      ),
+      `Cod CA` = c(
+        rep("01", 8), # Andalucía
+        rep("02", 3), # Aragón
+        "03",         # Asturias
+        "04",         # Baleares
+        rep("05", 2), # Canarias
+        "06",         # Cantabria
+        rep("07", 9), # CyL
+        rep("08", 5), # CLM
+        rep("09", 4), # Cataluña
+        rep("10", 3), # Valencia
+        rep("11", 2), # Extremadura
+        rep("12", 4), # Galicia
+        "13",         # Madrid
+        "14",         # Murcia
+        "15",         # Navarra
+        rep("16", 3), # País Vasco
+        "17",         # La Rioja
+        "18",         # Ceuta
+        "19"          # Melilla
+      )
+    )
+
+    # 3. AGRUPAR POR PROVINCIA Y AÑADIR CA
+    poblacion_final_df <- df_raw %>%
+      dplyr::mutate(cod_provincia = substr(cod_mun, 1, 2)) %>%
+      # Agrupación por provincia y año
+      dplyr::group_by(cod_provincia, anio) %>%
+      dplyr::summarise(
+        poblacion_hombres = sum(poblacion_hombres, na.rm = TRUE),
+        poblacion_mujeres = sum(poblacion_mujeres, na.rm = TRUE),
+        poblacion_total   = sum(poblacion_total, na.rm = TRUE),
+        .groups = "drop"
+      ) %>%
+      # Unir con el mapa de Comunidades Autónomas
+      dplyr::left_join(mapa_ca_prov, by = "cod_provincia") %>%
+      # Renombrar para output final
+      dplyr::rename(`Cod provincia` = cod_provincia) %>%
+      # Reordenar columnas: Anio, Cod CA, Cod Provincia, resto...
+      dplyr::select(anio, `Cod CA`, `Cod provincia`, dplyr::everything()) %>%
+      # Ordenar filas: Anio -> CA -> Provincia
+      dplyr::arrange(anio, `Cod CA`, `Cod provincia`)
+      
   } else {
-    poblacion_municipio_df <- tibble::tibble(
-      cod_mun = character(),
+    poblacion_final_df <- tibble::tibble(
       anio = integer(),
+      `Cod CA` = character(),
+      `Cod provincia` = character(),
       poblacion_hombres = numeric(),
       poblacion_mujeres = numeric(),
       poblacion_total = numeric()
     )
   }
 
-  # renombrar cod_mun -> 'Cod municipio' para mantener consistencia
-  poblacion_municipio_df <- dplyr::rename(poblacion_municipio_df, `Cod municipio` = cod_mun)
-
-  # Guardar CSV procesado (sobrescribir)
+  # Guardar CSV procesado
   tryCatch({
-    write.csv(poblacion_municipio_df, file = ruta_poblacion_salida, row.names = FALSE, fileEncoding = "ISO-8859-1")
-    if (!quiet) message("Fichero de población guardado en: ", ruta_poblacion_salida)
+    write.csv(poblacion_final_df, file = ruta_poblacion_salida, row.names = FALSE, fileEncoding = "ISO-8859-1")
+    if (!quiet) message("Fichero guardado (con Cod CA y ordenado): ", ruta_poblacion_salida)
 
-    # BORRAR los CSV origen descargados (solo los que figuran en poblacion_files)
+    # Limpieza de ficheros temporales
     if (length(poblacion_files) > 0) {
-      removed <- sapply(poblacion_files, function(f) {
-        if (file.exists(f)) {
-          tryCatch({ file.remove(f); TRUE }, error = function(e) { if (!quiet) message("No se pudo borrar ", f, ": ", e$message); FALSE })
-        } else FALSE
-      })
-      if (!quiet) message("Eliminados ", sum(removed), " ficheros fuente de población.")
+      sapply(poblacion_files, function(f) if(file.exists(f)) try(file.remove(f), silent=TRUE))
+      if (!quiet) message("Eliminados ficheros fuente temporales.")
     }
 
   }, error = function(e) {
-    warning("No se pudo escribir el fichero de población: ", e$message)
+    warning("No se pudo escribir el fichero: ", e$message)
     ruta_poblacion_salida <<- NA_character_
   })
 
-  if (!quiet) {
-    message(sprintf("Población: ficheros procesados: %d; registros municipales: %d",
-                    length(poblacion_files), nrow(poblacion_municipio_df)))
-  }
-
-  invisible(list(files = poblacion_files, poblacion = poblacion_municipio_df, ruta_salida = ruta_poblacion_salida))
+  invisible(list(files = poblacion_files, poblacion = poblacion_final_df, ruta_salida = ruta_poblacion_salida))
 }
