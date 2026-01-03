@@ -1,5 +1,7 @@
 procesar_csv_sepe <- function(ruta_csv) {
+  
   # --- 0. Leer CSV ----------------------------------------------------------
+  # Se salta la primera fila que es un título descriptivo largo
   df <- read.csv(
     file = ruta_csv,
     sep = ";",
@@ -10,218 +12,134 @@ procesar_csv_sepe <- function(ruta_csv) {
     check.names = FALSE
   )
   
-  # Limpiar nombres de columnas
+  # Limpiar nombres de columnas (quitar espacios extra)
   names(df) <- trimws(names(df))
   
-  # Renombrar columnas principales si existen
+  # --- 1. RENOMBRADO INICIAL DE COLUMNAS BASADO EN POSICIÓN ---
+  # 1=Mes, 3=Cod CA, 5=Cod Prov
   if (length(names(df)) >= 1) names(df)[1] <- "Cod mes"
-  if (length(names(df)) >= 3) names(df)[3] <- "Cod comunidad"
+  if (length(names(df)) >= 3) names(df)[3] <- "Cod CA"      
   if (length(names(df)) >= 4) names(df)[4] <- "Comunidad Aut"
   if (length(names(df)) >= 5) names(df)[5] <- "Cod provincia"
+  # Asumimos que la col 6 es el Nombre de la Provincia (útil para no perderlo)
+  if (length(names(df)) >= 6) names(df)[6] <- "Provincia"
   
-  primera_col_name <- names(df)[1]
-
-  # --- Sustituir "<5" por 0 en columnas numéricas (detectadas por contenido) ---
+  # --- 2. LIMPIEZA DE DATOS NUMÉRICOS ("<5" y comas) ---
   es_col_numerica <- sapply(df, function(x) {
     any(grepl("[0-9]", x, perl = TRUE), na.rm = TRUE)
   })
-
+  
+  # Identificamos columnas numéricas (excluyendo los códigos iniciales que pueden parecer números)
+  # Normalmente desde la columna "Total" (aprox col 9) hacia adelante son los datos
+  # Pero usaremos tu lógica de detección, forzando a que las de identificación NO se conviertan si no queremos
   cols_num <- names(df)[es_col_numerica]
-
+  
+  # Excluir explícitamente columnas de códigos que no queremos sumar numéricamente ahora
+  cols_excluir <- c("Cod mes", "Cod CA", "Cod provincia", "anio")
+  cols_num <- setdiff(cols_num, cols_excluir)
+  
+  # Primero quitamos <5
   df[cols_num] <- lapply(df[cols_num], function(col) {
     col_chr <- as.character(col)
     col_chr[col_chr == "<5"] <- "0"
     col_chr
   })
-
+  
+  # Convertimos a numérico gestionando decimales
   df[cols_num] <- lapply(df[cols_num], function(col) {
     col_corrected <- gsub(",", ".", as.character(col), fixed = TRUE)
     suppressWarnings(as.numeric(col_corrected))
   })
   
+  # --- 3. CREACIÓN DE VARIABLES AUXILIARES (AÑO, FORMATOS) ---
   
-  # --- 1. Crear anio ---------------------------------------------------
-  if (!is.null(df[[1]])) {
-    df[["anio"]] <- substr(as.character(df[[1]]), 1, 4)
+  # Anio (primeros 4 caracteres de la columna 1 "Cod mes")
+  if (!is.null(df[["Cod mes"]])) {
+    df[["anio"]] <- substr(as.character(df[["Cod mes"]]), 1, 4)
   } else {
-    stop("La primera columna no existe o está vacía.")
+    stop("La columna 'Cod mes' no existe.")
   }
   
-  # --- 2. Normalizar Codigo Municipio -> Cod municipio ---------------------
-  idx_mun <- which(names(df) == "Codigo Municipio")
-  if (length(idx_mun) != 1L) {
-    stop("No se encontró la columna 'Codigo Municipio' en el CSV.")
-  }
-  pad5 <- function(x) {
+  # Función auxiliar para rellenar ceros (padding)
+  pad_zeros <- function(x, width) {
     x_chr <- as.character(x)
     x_chr[is.na(x_chr)] <- ""
     x_chr <- trimws(x_chr)
     sapply(x_chr, function(s) {
-      if (nchar(s) >= 5) return(s)
-      paste0(strrep("0", 5 - nchar(s)), s)
+      if (nchar(s) >= width || nchar(s) == 0) return(s)
+      paste0(strrep("0", width - nchar(s)), s)
     }, USE.NAMES = FALSE)
   }
-  df[[idx_mun]] <- pad5(df[[idx_mun]])
-  names(df)[idx_mun] <- "Cod municipio"
   
-  # --- 3. Eliminar columna 'mes' si existe ---------------------------------
-  idx_mes <- which(names(df) == "mes")
-  if (length(idx_mes) == 1L) df <- df[, -idx_mes, drop = FALSE]
-  
-  # --- 4. Reordenar: dejar anio como segunda columna --------------------
-  idx_cod_anio <- which(names(df) == "anio")
-  if (length(idx_cod_anio) == 1L) {
-    otras <- setdiff(seq_along(df), c(1, idx_cod_anio))
-    df <- df[, c(1, idx_cod_anio, otras), drop = FALSE]
+  # Normalizar Codigo Provincia y CA para que sean claves fiables
+  if ("Cod CA" %in% names(df)) {
+    df[["Cod CA"]] <- pad_zeros(df[["Cod CA"]], 2)
   }
+  if ("Cod provincia" %in% names(df)) {
+    df[["Cod provincia"]] <- pad_zeros(df[["Cod provincia"]], 2)
+  }
+
+  # --- 4. PREPARACIÓN PARA AGREGACIÓN (SUMA POR PROVINCIA Y MES) ---
   
-  # --- 5. Determinar la columna "TOTAL" por índice fijo (9) ----------------
+  # Identificar columna Total (suele ser la 9) para separar descriptivos de datos
   idx_total <- 9
-  if (idx_total > ncol(df)) stop("El data.frame no tiene una columna 9. No se puede usar como columna TOTAL.")
-  nombre_total <- names(df)[idx_total]
+  if (idx_total > ncol(df)) {
+      # Fallback: buscar columna llamada "Total"
+      idx_total <- which(names(df) == "Total")
+      if(length(idx_total) == 0) idx_total <- 9 # Asumimos 9 si falla todo
+  }
   
-  # Columna 9 - nombre y vector numérico (por si usa comas decimales)
-  nombre_col9 <- names(df)[9]
-  col9_raw <- df[[9]]
-  col9_num <- suppressWarnings(as.numeric(gsub(",", ".", as.character(col9_raw))))
+  # Columnas que formarán la "Clave" de agrupación (Group By)
+  # Queremos mantener: Año, Mes, Provincia (Cod y Nombre), CA (Cod y Nombre)
+  cols_agrupacion <- c("anio", "Cod mes", "Cod provincia", "Provincia", "Cod CA", "Comunidad Aut")
   
-  # --- 6. Preparar claves y tmp_ext para min/max ---------------------------
-  key_cols <- c("anio", "Cod municipio")
-  if (!all(key_cols %in% names(df))) stop("Faltan claves de agrupación en el data.frame.")
+  # Asegurarnos de que existen en el df antes de agrupar
+  cols_agrupacion <- intersect(cols_agrupacion, names(df))
   
-  tmp_ext <- data.frame(
-    df[key_cols],
-    col9 = col9_num,
-    Cod_mes = as.character(df[["Cod mes"]]),
-    stringsAsFactors = FALSE,
-    check.names = FALSE
+  # Columnas a sumar (las numéricas de datos)
+  # Son las columnas numéricas detectadas antes, excluyendo las claves
+  cols_datos <- setdiff(cols_num, cols_agrupacion)
+  
+  # Si por algún motivo metió el Cod Municipio en numéricos, lo quitamos
+  cols_datos <- cols_datos[!grepl("Municipio", cols_datos, ignore.case = TRUE)]
+  
+  # --- 5. AGREGACIÓN ---
+  
+  # Mensaje de depuración
+  message("Agrupando datos por: ", paste(cols_agrupacion, collapse=", "))
+  
+  # aggregate(datos ~ claves, FUN = sum)
+  # Usamos la sintaxis de fórmula o lista. Usaremos lista para manejar nombres dinámicos
+  df_agg <- aggregate(
+    x = df[cols_datos],
+    by = df[cols_agrupacion],
+    FUN = function(x) sum(x, na.rm = TRUE)
   )
   
-  # Asegurar tipos de ordenación coherentes
-  tmp_ext[["anio"]] <- as.character(tmp_ext[["anio"]])
-  tmp_ext[["Cod municipio"]] <- as.character(tmp_ext[["Cod municipio"]])
+  # --- 6. ORDENAR Y LIMPIEZA FINAL ---
   
-  # Orden y extracción de mínimos por grupo
-  ord_min <- with(tmp_ext, order(tmp_ext[["anio"]], tmp_ext[["Cod municipio"]], col9, na.last = TRUE))
-  tmp_min <- tmp_ext[ord_min, , drop = FALSE]
-  min_df <- tmp_min[!duplicated(tmp_min[c("anio", "Cod municipio")]), , drop = FALSE]
+  # Ordenar por Cod Provincia y luego por Cod Mes (cronológico)
+  df_agg <- df_agg[order(df_agg[["Cod provincia"]], df_agg[["Cod mes"]]), ]
   
-  # Orden y extracción de máximos por grupo
-  ord_max <- with(tmp_ext, order(tmp_ext[["anio"]], tmp_ext[["Cod municipio"]], -col9, na.last = TRUE))
-  tmp_max <- tmp_ext[ord_max, , drop = FALSE]
-  max_df <- tmp_max[!duplicated(tmp_max[c("anio", "Cod municipio")]), , drop = FALSE]
-  
-  # Renombrar columnas de min/max y las columnas de mes como solicitado
-  nombre_col_min <- paste0(nombre_col9, "_min")
-  nombre_col_max <- paste0(nombre_col9, "_max")
-  
-  names(min_df)[names(min_df) == "col9"]    <- nombre_col_min
-  names(min_df)[names(min_df) == "Cod_mes"] <- "Cod min_mes"
-  
-  names(max_df)[names(max_df) == "col9"]    <- nombre_col_max
-  names(max_df)[names(max_df) == "Cod_mes"] <- "Cod max_mes"
-  
-  # --- 7. AGRUPACIÓN por anio y Cod municipio --------------------------
-  df <- df[order(as.character(df[["anio"]]), as.character(df[["Cod municipio"]])), , drop = FALSE]
-  
-  # Columnas a la izquierda/derecha de la columna total (índice 9)
-  if (idx_total > 1) left_cols <- names(df)[1:(idx_total - 1)] else left_cols <- character(0)
-  right_cols <- names(df)[idx_total:ncol(df)]
-  
-  left_non_key_cols <- setdiff(left_cols, key_cols)
-  
-  # 7.1 Agregación de columnas no-numéricas (primera fila del grupo) o generar df con claves si no hay left cols
-  if (length(left_non_key_cols) > 0) {
-    df_left_agg <- aggregate(df[left_non_key_cols], by = df[key_cols], FUN = function(x) x[1])
-  } else {
-    df_left_agg <- unique(df[key_cols])
-    rownames(df_left_agg) <- NULL
-  }
-  
-  # 7.2 Agregación de columnas numéricas (media, 2 decimales)
-  # --- CORRECCIÓN: seleccionar columnas (no filas) con df[, right_cols, drop = FALSE]
-  if (length(right_cols) == 0L) stop("No se han detectado columnas a la derecha de la columna TOTAL (índice 9).")
-  df_right <- df[, right_cols, drop = FALSE]
-  df_right[] <- lapply(df_right, function(x) {
-    x_char <- as.character(x)
-    # Eliminar separador de miles si existe y normalizar coma decimal
-    x_char <- gsub("\\.", "", x_char) # quita puntos de miles (si corresponde)
-    x_char <- gsub(",", ".", x_char)
-    suppressWarnings(as.numeric(x_char))
-  })
-  
-  df_right_agg <- aggregate(df_right, by = df[key_cols], FUN = function(x) round(mean(x, na.rm = TRUE), 2))
-  
-  # 7.3 Merge de ambas tablas
-  df_agg <- merge(df_left_agg, df_right_agg, by = key_cols, all = TRUE)
-  
-  # 7.4 Añadir min/max (usando los nuevos nombres de columna de mes)
-  last2 <- function(x) substr(trimws(x), pmax(nchar(trimws(x)) - 1, 1), nchar(trimws(x)))
-
-  if ("Cod min_mes" %in% names(min_df))  min_df[["Cod min_mes"]] <- last2(min_df[["Cod min_mes"]])
-  if ("Cod max_mes" %in% names(max_df))  max_df[["Cod max_mes"]] <- last2(max_df[["Cod max_mes"]])
-
-  # --- Merge como antes ---
-  if (nrow(min_df) > 0) {
-    df_agg <- merge(df_agg, min_df[, c(key_cols, nombre_col_min, "Cod min_mes")], by = key_cols, all.x = TRUE)
-  } else {
-    df_agg[[nombre_col_min]] <- NA
-    df_agg[["Cod min_mes"]] <- NA
-  }
-
-  if (nrow(max_df) > 0) {
-    df_agg <- merge(df_agg, max_df[, c(key_cols, nombre_col_max, "Cod max_mes")], by = key_cols, all.x = TRUE)
-  } else {
-    df_agg[[nombre_col_max]] <- NA
-    df_agg[["Cod max_mes"]] <- NA
-  }
-
-  
-  # --- 8. Reordenar columnas para salida ----------------------------------
-  cols_current <- names(df_agg)
-  col_order <- c(
-    intersect(primera_col_name, cols_current),
-    "anio",
-    "Cod municipio",
-    setdiff(cols_current, c(primera_col_name, "anio", "Cod municipio"))
-  )
-  col_order <- unique(col_order[col_order %in% cols_current])
-  df_agg <- df_agg[, col_order, drop = FALSE]
-  
-  # --- Eliminar la primera columna del resultado si existe -----------
-  if (ncol(df_agg) >= 1) {
-    df_agg <- df_agg[, -1, drop = FALSE]   # Eliminar la primera columna
-  } else {
-    warning("El data.frame resultado no tiene columnas; no se puede eliminar la primera columna.")
-  }
-
-  
-  # --- Reordenar filas por Cod municipio y luego por anio -------
-  if (all(c("Cod municipio", "anio") %in% names(df_agg))) {
-    # forzamos a character para evitar problemas con factores/números
-    df_agg[["Cod municipio"]] <- as.character(df_agg[["Cod municipio"]])
-    df_agg[["anio"]] <- as.character(df_agg[["anio"]])
-    df_agg <- df_agg[order(df_agg[["Cod municipio"]], df_agg[["anio"]]), , drop = FALSE]
-  } else {
-    warning("No se pudo reordenar por 'Cod municipio' y 'anio' porque no existen ambas columnas en el resultado.")
-  }
-  
-  # --- 9. Escribir CSV de salida ------------------------------------------
-  if (grepl("\\.csv$", ruta_csv, ignore.case = TRUE)) {
-    ruta_salida <- sub("\\.csv$", "_processed.csv", ruta_csv, ignore.case = TRUE)
-  } else {
-    ruta_salida <- paste0(ruta_csv, "_processed.csv")
-  }
-  
-  write.csv(
-    df_agg,
-    file = ruta_salida,
-    row.names = FALSE,
-    fileEncoding = "ISO-8859-1"
+  # Reorganizar columnas para que quede bonito (Claves primero, luego datos)
+  # Ponemos 'Cod mes' primero o 'anio' según preferencia. Dejaremos 'Cod mes' primero como original.
+  col_order_pref <- c("Cod mes", "anio", "Cod CA", "Comunidad Aut", "Cod provincia", "Provincia")
+  cols_finales <- c(
+    intersect(col_order_pref, names(df_agg)),
+    setdiff(names(df_agg), col_order_pref)
   )
   
+  df_agg <- df_agg[, cols_finales]
+  
+  # --- 7. GUARDAR ---
+  ruta_salida <- sub("\\.csv$", "_processed.csv", ruta_csv, ignore.case = TRUE)
+  if (ruta_salida == ruta_csv) ruta_salida <- paste0(ruta_csv, "_processed.csv")
+
+  write.csv(df_agg, file = ruta_salida, row.names = FALSE, fileEncoding = "ISO-8859-1")
+  
+  # Eliminar original si se desea (descomentar con precaución)
   if (file.exists(ruta_csv)) file.remove(ruta_csv)
-
-  message("Fichero procesado escrito en: ", ruta_salida)
+  
+  message("Procesado OK (Suma mensual por provincia): ", ruta_salida)
   invisible(ruta_salida)
 }

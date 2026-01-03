@@ -11,32 +11,12 @@ library(plotly)
 
 # Definir la lista de años al inicio
 anios <- 2010:2024
+
 anios_titulos <- paste(min(anios), max(anios), sep = "–")
 
-# --------------------------------------------------------------------------------------
-# ---------- 1. FUNCIÓN PARA LEER UN FICHERO DEL SEPE ----------
-# --------------------------------------------------------------------------------------
-leer_sepe_csv <- function(ruta) {
-  if (!file.exists(ruta)) {
-    warning(sprintf("Archivo no encontrado: %s", ruta))
-    return(NULL)
-  }
-
-  df <- tryCatch(
-    read.csv(
-      ruta,
-      sep = ";",
-      fileEncoding = "latin1",
-      header = TRUE,
-      skip = 1,
-      check.names = FALSE,
-      stringsAsFactors = FALSE
-    ),
-    error = function(e) {
-      message(sprintf("Error leyendo %s : %s", basename(ruta), e$message))
-      return(NULL)
-    }
-  )
+source("preprocessing.R")
+res <- descargar_datasets_sepe(anios = anios, dir_data = "data")
+res <- descargar_y_procesar_poblacion(codigos_ine = 2854:2908, dir_data = "data", anio_min = 2010, anio_max = 2025)
 
   if (is.null(df)) return(NULL)
 
